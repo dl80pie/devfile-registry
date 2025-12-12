@@ -1,0 +1,25 @@
+[
+  {
+    "name": "python-workspace",
+    "version": "1.0.0",
+    "displayName": "Python Workspace",
+    "description": "Python development workspace with CUDA support",
+    "type": "stack",
+    "tags": [
+      "Python",
+      "CUDA",
+      "Jupyter",
+      "FastAPI",
+      "Flask"
+    ],
+    "icon": "https://raw.githubusercontent.com/devfile-samples/devfile-stack-icons/main/python.svg",
+    "projectType": "Python",
+    "language": "Python",
+    "links": {
+      "self": "devfile-catalog/python-workspace:1.0.0"
+    },
+    "resources": [
+      "devfile.yaml"
+    ]
+  }
+]

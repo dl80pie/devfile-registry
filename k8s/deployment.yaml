@@ -1,0 +1,153 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: devfile-registry
+  namespace: openshift-operators
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: devfile-registry
+  template:
+    metadata:
+      labels:
+        app: devfile-registry
+    spec:
+      initContainers:
+        - name: git-clone
+          image: alpine/git:latest
+          env:
+            - name: GIT_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: gitlab-credentials
+                  key: username
+            - name: GIT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: gitlab-credentials
+                  key: password
+            - name: GIT_REPO_URL
+              valueFrom:
+                secretKeyRef:
+                  name: gitlab-credentials
+                  key: repo-url
+          command:
+            - /bin/sh
+            - -c
+            - |
+              cd /data
+              # URL-Encoding für Credentials
+              REPO_HOST=$(echo "${GIT_REPO_URL}" | sed 's|http://||;s|https://||')
+              PROTO=$(echo "${GIT_REPO_URL}" | grep -o '^https\?')
+              git clone --depth 1 "${PROTO}://${GIT_USERNAME}:${GIT_PASSWORD}@${REPO_HOST}" .
+              
+              # index.json umbenennen für nginx
+              mv index.json index
+          volumeMounts:
+            - name: registry-data
+              mountPath: /data
+      containers:
+        - name: nginx
+          image: nginxinc/nginx-unprivileged:alpine
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: registry-data
+              mountPath: /usr/share/nginx/html
+            - name: nginx-config
+              mountPath: /etc/nginx/conf.d
+          resources:
+            limits:
+              memory: "128Mi"
+              cpu: "250m"
+      volumes:
+        - name: registry-data
+          emptyDir: {}
+        - name: nginx-config
+          configMap:
+            name: devfile-registry-nginx-config
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: devfile-registry-nginx-config
+  namespace: openshift-operators
+data:
+  default.conf: |
+    server {
+        listen 8080;
+        root /usr/share/nginx/html;
+        
+        add_header 'Access-Control-Allow-Origin' '*' always;
+        add_header 'Access-Control-Allow-Methods' 'GET, OPTIONS' always;
+        add_header 'Access-Control-Allow-Headers' '*' always;
+        
+        location = / {
+            default_type application/json;
+            try_files /index =404;
+        }
+        
+        location / {
+            try_files $uri $uri/ =404;
+        }
+        
+        location = /index {
+            default_type application/json;
+            try_files /index =404;
+        }
+        
+        location = /index/all {
+            default_type application/json;
+            try_files /index =404;
+        }
+        
+        location = /v2index {
+            default_type application/json;
+            try_files /index =404;
+        }
+        
+        location = /devfiles/index.json {
+            default_type application/json;
+            try_files /index =404;
+        }
+        
+        location ~ ^/devfile-catalog/(.+) {
+            default_type text/yaml;
+            alias /usr/share/nginx/html/stacks/$1/devfile.yaml;
+        }
+        
+        location ~ ^/devfiles/([^/]+)/([^/]+)$ {
+            default_type text/yaml;
+            alias /usr/share/nginx/html/stacks/$1/devfile.yaml;
+        }
+        
+        location ~ ^/devfiles/([^/]+)$ {
+            default_type text/yaml;
+            alias /usr/share/nginx/html/stacks/$1/devfile.yaml;
+        }
+    }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: devfile-registry
+  namespace: openshift-operators
+spec:
+  selector:
+    app: devfile-registry
+  ports:
+    - port: 8080
+      targetPort: 8080
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: devfile-registry
+  namespace: openshift-operators
+spec:
+  to:
+    kind: Service
+    name: devfile-registry
+  port:
+    targetPort: 8080

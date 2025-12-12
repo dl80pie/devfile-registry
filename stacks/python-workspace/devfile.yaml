@@ -1,0 +1,179 @@
+schemaVersion: 2.2.0
+metadata:
+  name: python-workspace
+  displayName: Python Workspace
+  description: Python development workspace with CUDA support
+  tags:
+    - Python
+    - CUDA
+    - Jupyter
+    - FastAPI
+    - Flask
+  projectType: Python
+  language: Python
+  version: 1.0.0
+
+components:
+  - name: python
+    container:
+      image: harbor.home.lab/library/developer-images:python-92e8204
+      memoryRequest: 1Gi
+      memoryLimit: 16Gi
+      cpuRequest: 500m
+      cpuLimit: 2000m
+      mountSources: true
+      sourceMapping: /projects
+      env:
+        - name: PYTHONPATH
+          value: /projects
+        - name: PIP_USER
+          value: 'true'
+        - name: UV_CACHE_DIR
+          value: /projects/.uv-cache
+      endpoints:
+        - name: jupyter
+          targetPort: 8080
+          exposure: public
+          protocol: https
+          attributes:
+            discoverable: 'true'
+            urlRewriteSupported: 'true'
+        - name: flask-dev
+          targetPort: 5000
+          exposure: public
+          protocol: https
+          attributes:
+            discoverable: 'true'
+        - name: fastapi-dev
+          targetPort: 8000
+          exposure: public
+          protocol: https
+          attributes:
+            discoverable: 'true'
+      volumeMounts:
+        - name: pip-cache
+          path: /home/user/.pip
+        - name: projects
+          path: /projects
+  - name: pip-cache
+    volume:
+      size: 2Gi
+
+commands:
+  - id: install-requirements
+    exec:
+      component: python
+      workingDir: /projects
+      commandLine: |
+        if [ -f requirements.txt ]; then
+          pip install --user -r requirements.txt
+        fi
+      group:
+        kind: build
+  - id: start-jupyter
+    exec:
+      component: python
+      workingDir: /projects
+      commandLine: jupyter lab --ip=0.0.0.0 --port=8080 --no-browser --allow-root --NotebookApp.token='' --NotebookApp.password=''
+      group:
+        kind: run
+  - id: python-run
+    exec:
+      component: python
+      workingDir: /projects
+      commandLine: python ${file}
+      group:
+        kind: run
+  - id: install-deps
+    exec:
+      label: Install project requirements.txt
+      component: python
+      workingDir: /projects
+      commandLine: |
+        if [ -f requirements.txt ]; then
+          if [ -z "${PIP_INDEX_URL}" ]; then echo "PIP_INDEX_URL not set. Skipping network install in airgapped environment."; exit 0; fi
+          python3.12 -m pip install --user --index-url "${PIP_INDEX_URL}" -r requirements.txt
+        else
+          echo "No requirements.txt found, skipping"
+        fi
+  - id: show-versions
+    exec:
+      label: Show Installed Versions
+      component: python
+      workingDir: /projects
+      commandLine: |
+        echo "=== System Information ==="
+        cat /etc/redhat-release
+        echo ""
+        echo "=== Python Versions ==="
+        python3.11 --version
+        python3.12 --version
+        echo ""
+        echo "=== Installed Tools ==="
+        asciidoctor --version
+        rclone --version
+        jq --version
+        echo ""
+        echo "=== Python Packages ==="
+        echo "Python 3.11:"
+        python3.11 -m pip list | grep -E "(setuptools|pytest|virtualenv|yq|uv)"
+        echo "Python 3.12:"
+        python3.12 -m pip list | grep -E "(setuptools|pytest|virtualenv|yq|uv)"
+  - id: gpu-monitoring
+    exec:
+      label: Start GPU Monitoring
+      component: python
+      workingDir: /projects
+      commandLine: |
+        watch -n 1 nvidia-smi
+  - id: start-custom-app
+    exec:
+      label: Start Custom App (port 8080)
+      component: python
+      workingDir: /projects
+      commandLine: |
+        set -e
+        echo "Trying to start app on 0.0.0.0:8080"
+        if [ -f package.json ]; then
+          export PORT=8080 HOST=0.0.0.0
+          if npm run -s start; then exit 0; fi
+          if [ -f server.js ]; then node server.js; exit 0; fi
+        fi
+        if [ -f manage.py ]; then
+          python3.12 manage.py runserver 0.0.0.0:8080
+          exit 0
+        fi
+        if python3.12 -c "import uvicorn" >/dev/null 2>&1; then
+          uvicorn main:app --host 0.0.0.0 --port 8080
+          exit 0
+        fi
+        if python3.12 -c "import flask" >/dev/null 2>&1; then
+          export FLASK_APP=${FLASK_APP:-app.py}
+          FLASK_RUN_HOST=0.0.0.0 FLASK_RUN_PORT=8080 flask run
+          exit 0
+        fi
+        echo "Kein bekannter Startbefehl gefunden. Bitte passen Sie 'start-custom-app' in devfile.yaml an."
+        exit 1
+      group:
+        kind: run
+        isDefault: true
+  - id: init-uv-cache
+    exec:
+      label: Init uv cache dir
+      component: python
+      workingDir: /projects
+      commandLine: |
+        mkdir -p /projects/.uv-cache
+  - id: init-venv
+    exec:
+      label: Init the venv
+      component: python
+      workingDir: ${PROJECTS_ROOT}/python
+      commandLine: |
+        uv venv && source .venv/bin/activate
+
+events:
+  postStart:
+    - init-uv-cache
+    - init-venv
+    - show-versions
